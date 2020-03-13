@@ -28,13 +28,14 @@ class FlaskUI:
     """
 
 
-    def __init__(self, app=None, width=800, height=600, fullscreen=False, maximized=False, app_mode=True,  browser_path="", server="flask", host="127.0.0.1", port=5000, socketio=None, on_exit=None):
+    def __init__(self, app=None, width=800, height=600, fullscreen=False, maximized=False, app_mode=True,  browser_path="", server="flask", host="127.0.0.1", port=5000, socketio=None, on_exit=None, clientRunning=True):
         self.flask_app = app
         self.width = str(width)
         self.height= str(height)
         self.fullscreen = fullscreen
         self.maximized = maximized
         self.app_mode = app_mode
+        self.clientRunning = clientRunning
         self.browser_path = browser_path
         self.computed_browser_path = self.find_browser(browser_path)
         self.absolute_browser_directory = os.path.dirname(os.path.abspath(browser_path))
@@ -46,7 +47,7 @@ class FlaskUI:
         self.localhost = "http://{}:{}/".format(host, port) # http://127.0.0.1:5000/
         self.flask_thread = Thread(target=self.run_flask) #daemon doesn't work...
         self.browser_thread = Thread(target=self.open_browser)
-        self.close_server_thread = Thread(target=self.close_server)
+        self.main_thread = Thread(target=self.main_thread)
         self.BROWSER_PROCESS = None
 
 
@@ -54,25 +55,16 @@ class FlaskUI:
         """
             Start the flask and gui threads instantiated in the constructor func
         """
-        
-        self.flask_thread.start()    
-        self.browser_thread.start()
-        
-        #Wait for the browser to run (1 min)
-        count = 0
-        while not self.browser_runs():
-            time.sleep(1)
-            if count > 60:
-                break
-            count += 1
 
-        self.close_server_thread.start()
+        self.flask_thread.start()
+        self.browser_thread.start()
+        self.main_thread.start()
 
         self.browser_thread.join()
         self.flask_thread.join()
-        self.close_server_thread.join()
+        self.main_thread.join()
 
-    
+
     def run_flask(self):
         """
             Run flask or other framework specified
@@ -113,7 +105,7 @@ class FlaskUI:
             return default_dir
         # use mdfind ci to locate Chrome in alternate locations and return the first one
         name = 'Google Chrome.app'
-        alternate_dirs = [x for x in sps.check_output(["mdfind", name]).decode().split('\n') if x.endswith(name)] 
+        alternate_dirs = [x for x in sps.check_output(["mdfind", name]).decode().split('\n') if x.endswith(name)]
         if len(alternate_dirs):
             return alternate_dirs[0] + '/Contents/MacOS/Google Chrome'
         return None
@@ -164,10 +156,6 @@ class FlaskUI:
         if path != "":
             raise Exception("Path {} does not exist!".format(path))
 
-        # If there's no specified browser path, close opened browser processes and wait for them to be closed
-        print("You are running the app in the development mode. All opened Chrome processes will be closed. To avoid that, put portable Chromium near to the application file and specify its path.")
-        self.close_chromes()
-
         # If browser_path not completed try to find default chrome installation
         return self.get_default_chrome_path()
 
@@ -201,42 +189,15 @@ class FlaskUI:
             import webbrowser
             webbrowser.open_new(self.localhost)
 
-    def close_chromes(self):
-        chrome_pids = [p.info['pid'] for p in psutil.process_iter(attrs=['pid', 'name']) if 'chrome' in p.info['name']]
-        [psutil.Process(pid).kill() for pid in chrome_pids]
+    def kill(self):
+        self.clientRunning = False
 
-    def browser_runs(self):
-        """
-            Check if chrome is opened / Improv daemon not working
-        """
-        try:
-            
-            #TODO maybe some calls from javascript to a flask/django url will work better to 
-            # check if flaskwebgui browser is still up, 
-            # the user will add just flaskwebgui.js  for this to work
-
-            # If user specified browser path
-            if os.path.isfile(self.browser_path):
-                return len(list(filter(lambda p : 'chrome' in p.name() and p.cwd() == self.absolute_browser_directory, psutil.process_iter()))) == 1
-            # If user didn't specify browser path (development mode)
-            else:
-                for p in psutil.process_iter():
-                    if 'chrome' in p.name() and self.BROWSER_PROCESS.pid == p.pid:
-                        if p.status() is not 'zombie':
-                            return True
-                        else:
-                            return False
-
-        except: #Fails untill server and browser starts
-            return True
-
-
-    def close_server(self):
+    def main_thread(self):
         """
             If browser process is not running close flask server
         """
 
-        while self.browser_runs():
+        while self.clientRunning:
             time.sleep(2)
 
         if self.on_exit:
@@ -244,26 +205,3 @@ class FlaskUI:
 
         #Kill current python process
         psutil.Process(os.getpid()).kill()
-
-
-
-
-
-
-
-
-
-    # def get_files_from_cwd(self):
-    #     """
-    #         Get a list of files from the current directory
-    #     """
-
-    #     root_path = os.getcwd()
-
-    #     allfiles = []
-    #     for root, dirs, files in os.walk(root_path):
-    #         for file in files:
-    #             path_tofile = os.path.join(root, file)
-    #             allfiles.append(path_tofile)
-
-    #     return allfiles
