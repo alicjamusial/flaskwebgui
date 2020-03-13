@@ -36,6 +36,8 @@ class FlaskUI:
         self.maximized = maximized
         self.app_mode = app_mode
         self.browser_path = browser_path
+        self.computed_browser_path = self.find_browser(browser_path)
+        self.absolute_browser_directory = os.path.dirname(os.path.abspath(browser_path))
         self.server = server
         self.host = host
         self.port = port
@@ -44,18 +46,15 @@ class FlaskUI:
         self.localhost = "http://{}:{}/".format(host, port) # http://127.0.0.1:5000/
         self.flask_thread = Thread(target=self.run_flask) #daemon doesn't work...
         self.browser_thread = Thread(target=self.open_browser)
-        self.close_flask_thread = Thread(target=self.close_server)
+        self.close_server_thread = Thread(target=self.close_server)
         self.BROWSER_PROCESS = None
-        #TODO Need to find a way to identify the flaskwebgui chrome instance and close that one..
-        chrome_pids = [p.info['pid'] for p in psutil.process_iter(attrs=['pid', 'name']) if 'chrome' in p.info['name']]
-        [psutil.Process(pid).kill() for pid in chrome_pids]
 
 
     def run(self):
         """
             Start the flask and gui threads instantiated in the constructor func
         """
-
+        
         self.flask_thread.start()    
         self.browser_thread.start()
         
@@ -67,11 +66,11 @@ class FlaskUI:
                 break
             count += 1
 
-        self.close_flask_thread.start()
+        self.close_server_thread.start()
 
         self.browser_thread.join()
         self.flask_thread.join()
-        self.close_flask_thread.join()
+        self.close_server_thread.join()
 
     
     def run_flask(self):
@@ -93,23 +92,6 @@ class FlaskUI:
                 raise Exception("{} must be a function which starts the webframework server!".format(self.server))
         else:
             self.server()
-
-
-    def get_files_from_cwd(self):
-        """
-            Get a list of files from the current directory
-        """
-
-        root_path = os.getcwd()
-
-        allfiles = []
-        for root, dirs, files in os.walk(root_path):
-            for file in files:
-                path_tofile = os.path.join(root, file)
-                allfiles.append(path_tofile)
-
-        return allfiles
-
 
 
     def get_default_chrome_path(self):
@@ -168,77 +150,83 @@ class FlaskUI:
         return chrome_path
 
 
-    def find_browser(self):
+    def find_browser(self, path):
         """
             Find a path to browser
             Chrome/Chromium is prefered because it has a nice 'app' mode which looks like a desktop app
         """
 
         # Return browser_path param
-        if os.path.isfile(self.browser_path):
-            return self.browser_path
+        if os.path.isfile(path):
+            return path
+
         # Raise error if browser path param doesn't exist
-        if self.browser_path != "":
-            raise Exception("Path {} does not exist!".format(self.browser_path))
-        # Return browser_path from curent folder if chrome.exe/.app./sh file is found
-        files = self.get_files_from_cwd()
-        chrome = [fpath for fpath in files if fpath[-4:] in [".exe", ".app"] or fpath[-3:] in [".sh"]]
-        if len(chrome) == 1:
-            if os.path.isfile(chrome[0]):
-                return os.path.relpath(chrome[0])
-        # If browser_path not completed and in curent folder portable chrome not found then 
-        # try to find default chrome installation
+        if path != "":
+            raise Exception("Path {} does not exist!".format(path))
+
+        # If there's no specified browser path, close opened browser processes and wait for them to be closed
+        print("You are running the app in the development mode. All opened Chrome processes will be closed. To avoid that, put portable Chromium near to the application file and specify its path.")
+        self.close_chromes()
+
+        # If browser_path not completed try to find default chrome installation
         return self.get_default_chrome_path()
-        
- 
+
+
     def open_browser(self):
         """
             Open the browser selected (by default it looks for chrome)
         """
 
-        browser_path = self.find_browser()
-        
-        if browser_path:
+        if self.computed_browser_path:
             try:
-                if self.app_mode: 
+                if self.app_mode:
 
                     if self.fullscreen:
-                        self.BROWSER_PROCESS = sps.Popen([browser_path, "--new-window", "--start-fullscreen", '--app={}'.format(self.localhost)], 
-                        stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
+                        self.BROWSER_PROCESS = sps.Popen([self.computed_browser_path, "--new-window", "--start-fullscreen", '--app={}'.format(self.localhost)],
+                                                         stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
                     elif self.maximized:
-                        self.BROWSER_PROCESS = sps.Popen([browser_path, "--new-window", "--start-maximized", '--app={}'.format(self.localhost)],
-                        stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
+                        self.BROWSER_PROCESS = sps.Popen([self.computed_browser_path, "--new-window", "--start-maximized", '--app={}'.format(self.localhost)],
+                                                         stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
                     else:
-                        self.BROWSER_PROCESS = sps.Popen([browser_path, "--new-window", "--window-size={},{}".format(self.width, self.height),
-                        '--app={}'.format(self.localhost)], 
-                        stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
+                        self.BROWSER_PROCESS = sps.Popen([self.computed_browser_path, "--new-window", "--window-size={},{}".format(self.width, self.height),
+                                                          '--app={}'.format(self.localhost)],
+                                                         stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
                 else:
-                    self.BROWSER_PROCESS = sps.Popen([browser_path, self.localhost], 
-                    stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
+                    self.BROWSER_PROCESS = sps.Popen([self.computed_browser_path, self.localhost],
+                                                     stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
             except:
-                self.BROWSER_PROCESS = sps.Popen([browser_path, self.localhost], 
-                stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
+                self.BROWSER_PROCESS = sps.Popen([self.computed_browser_path, self.localhost],
+                                                 stdout=sps.PIPE, stderr=sps.PIPE, stdin=sps.PIPE)
         else:
             import webbrowser
             webbrowser.open_new(self.localhost)
 
-    def chrome_pids(self):
-        return [p.info['pid'] for p in psutil.process_iter(attrs=['pid', 'name']) if 'chrome' in p.info['name']]
-        
+    def close_chromes(self):
+        chrome_pids = [p.info['pid'] for p in psutil.process_iter(attrs=['pid', 'name']) if 'chrome' in p.info['name']]
+        [psutil.Process(pid).kill() for pid in chrome_pids]
+
     def browser_runs(self):
         """
             Check if chrome is opened / Improv daemon not working
         """
         try:
             
-            for p in psutil.process_iter():
-                if 'chrome' in p.name() and self.BROWSER_PROCESS.pid == p.pid:
-                    #print("Match: ", p.pid, p.name(), p.status())
-                    if p.status() is not 'zombie':
-                        return True
-                    else:
-                        return False
-                      
+            #TODO maybe some calls from javascript to a flask/django url will work better to 
+            # check if flaskwebgui browser is still up, 
+            # the user will add just flaskwebgui.js  for this to work
+
+            # If user specified browser path
+            if os.path.isfile(self.browser_path):
+                return len(list(filter(lambda p : 'chrome' in p.name() and p.cwd() == self.absolute_browser_directory, psutil.process_iter()))) == 1
+            # If user didn't specify browser path (development mode)
+            else:
+                for p in psutil.process_iter():
+                    if 'chrome' in p.name() and self.BROWSER_PROCESS.pid == p.pid:
+                        if p.status() is not 'zombie':
+                            return True
+                        else:
+                            return False
+
         except: #Fails untill server and browser starts
             return True
 
@@ -249,24 +237,33 @@ class FlaskUI:
         """
 
         while self.browser_runs():
-            # try:
-            #     print("Browser running: ",self.BROWSER_PROCESS.pid)
-            # except:
-            #     pass
             time.sleep(2)
 
         if self.on_exit:
             self.on_exit()
-            
-        #print("Browser closed!")
+
         #Kill current python process
         psutil.Process(os.getpid()).kill()
-        
-        
-
-        
-
-        
-        
 
 
+
+
+
+
+
+
+
+    # def get_files_from_cwd(self):
+    #     """
+    #         Get a list of files from the current directory
+    #     """
+
+    #     root_path = os.getcwd()
+
+    #     allfiles = []
+    #     for root, dirs, files in os.walk(root_path):
+    #         for file in files:
+    #             path_tofile = os.path.join(root, file)
+    #             allfiles.append(path_tofile)
+
+    #     return allfiles
